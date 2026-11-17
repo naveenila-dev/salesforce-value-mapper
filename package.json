@@ -1,7 +1,7 @@
 {
   "name": "salesforce-value-mapper",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "MIT",
   "description": "Generic Apex value mappings backed by Custom Metadata",
   "scripts": {

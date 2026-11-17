@@ -1,206 +1,68 @@
-/** Deterministic string mapper. Any invalid active configuration invalidates the snapshot. */
+/** Load once per integration, then use mappings.get(type)?.get(source). */
 public with sharing class MappingResolver {
-    private static final List<String> LAYERS = new List<String>{
-        'COMMON_BASE', 'COMMON_VERSION', 'PROVIDER_BASE', 'PROVIDER_VERSION'
-    };
-
-    private class Prepared {
-        Map<String, Value_Mapping__mdt> index = new Map<String, Value_Mapping__mdt>();
-        Set<String> versions = new Set<String>();
-        List<ConfigIssue> issues = new List<ConfigIssue>();
-        String digest;
-    }
-
-    /** Invalid configuration cannot be represented safely as a plain value map. */
     public class ConfigurationException extends Exception {}
 
-    /** Effective values for every type/source in a provider's requested version. */
     public static Map<String, Map<String, String>> loadValues(String provider, String version) {
-        return loadValues(provider, version, MappingRepository.loadSnapshot(new Set<String>{provider}));
+        return loadValues(provider, version, loadRecords(new Set<String>{provider}));
     }
 
-    public static Map<String, Map<String, String>> loadValues(
-        String provider, String version, MappingSnapshot snapshot
-    ) {
-        Prepared prepared = prepare(snapshot);
-        if (!prepared.issues.isEmpty()) {
-            throw new ConfigurationException('Invalid mapping configuration: ' + JSON.serialize(prepared.issues));
+    /** All configuration for the supplied providers plus common mappings. No DML. */
+    public static List<Value_Mapping__mdt> loadRecords(Set<String> providers) {
+        Set<String> keys = new Set<String>();
+        if (providers != null) {
+            for (String provider : providers) { keys.add(normalize(provider)); }
         }
+        return [
+            SELECT DeveloperName, Provider_Key__c, Version_Key__c, Mapping_Type__c,
+                   Source_Value__c, Target_Value__c, Active__c
+            FROM Value_Mapping__mdt
+            WHERE Provider_Key__c = null OR Provider_Key__c IN :keys
+            ORDER BY DeveloperName
+        ];
+    }
+
+    /** Also accepts preloaded records, for bulk callers and tests. */
+    public static Map<String, Map<String, String>> loadValues(
+        String provider, String version, List<Value_Mapping__mdt> records
+    ) {
+        if (records == null) { throw new ConfigurationException('Mapping records are required.'); }
+        String providerKey = normalize(provider);
+        String versionKey = normalize(version);
         Map<String, Map<String, String>> values = new Map<String, Map<String, String>>();
-        String providerKey = normalizeProvider(provider);
-        String versionKey = normalizeVersion(version);
-        for (Value_Mapping__mdt row : prepared.index.values()) {
-            String rowProvider = normalizeProvider(row.Provider_Key__c);
-            String rowVersion = normalizeVersion(row.Version_Key__c);
+        Map<String, Integer> priorities = new Map<String, Integer>();
+        Set<String> identities = new Set<String>();
+        for (Value_Mapping__mdt row : records) {
+            if (row == null) { throw new ConfigurationException('A mapping record is null.'); }
+            if (row.Active__c != true) { continue; }
+            String rowProvider = normalize(row.Provider_Key__c);
+            String rowVersion = normalize(row.Version_Key__c);
             if ((rowProvider != '' && rowProvider != providerKey) ||
                 (rowVersion != '' && rowVersion != versionKey)) { continue; }
-            if (!values.containsKey(row.Mapping_Type__c)) {
-                values.put(row.Mapping_Type__c, new Map<String, String>());
+            if (String.isBlank(row.Mapping_Type__c) || String.isEmpty(row.Source_Value__c) ||
+                String.isBlank(row.Target_Value__c)) {
+                throw new ConfigurationException('Invalid mapping: ' + row.DeveloperName);
             }
-            Map<String, String> category = values.get(row.Mapping_Type__c);
-            if (!category.containsKey(row.Source_Value__c)) {
-                MappingResult result = resolvePrepared(new MappingRequest(
-                    provider, version, row.Mapping_Type__c, row.Source_Value__c
-                ), prepared);
-                category.put(row.Source_Value__c, result.value);
+            String identity = JSON.serialize(new List<String>{
+                rowProvider, rowVersion, row.Mapping_Type__c, row.Source_Value__c
+            });
+            if (identities.contains(identity)) {
+                throw new ConfigurationException('Duplicate mapping: ' + row.DeveloperName);
+            }
+            identities.add(identity);
+            String key = JSON.serialize(new List<String>{row.Mapping_Type__c, row.Source_Value__c});
+            Integer priority = (rowProvider == '' ? 0 : 2) + (rowVersion == '' ? 0 : 1);
+            if (!priorities.containsKey(key) || priority > priorities.get(key)) {
+                if (!values.containsKey(row.Mapping_Type__c)) {
+                    values.put(row.Mapping_Type__c, new Map<String, String>());
+                }
+                values.get(row.Mapping_Type__c).put(row.Source_Value__c, row.Target_Value__c);
+                priorities.put(key, priority);
             }
         }
         return values;
     }
 
-    public static MappingResult resolve(MappingRequest request) {
-        return resolveAll(new List<MappingRequest>{request})[0];
-    }
-
-    public static MappingResult resolve(MappingRequest request, MappingSnapshot snapshot) {
-        return resolveAll(new List<MappingRequest>{request}, snapshot)[0];
-    }
-
-    public static List<MappingResult> resolveAll(List<MappingRequest> requests) {
-        if (requests == null || requests.isEmpty()) { return new List<MappingResult>(); }
-        Set<String> providers = new Set<String>();
-        for (MappingRequest request : requests) {
-            if (request != null) { providers.add(request.provider); }
-        }
-        return resolveAll(requests, MappingRepository.loadSnapshot(providers));
-    }
-
-    public static List<MappingResult> resolveAll(List<MappingRequest> requests, MappingSnapshot snapshot) {
-        List<MappingResult> results = new List<MappingResult>();
-        if (requests == null || requests.isEmpty()) { return results; }
-        Prepared prepared = prepare(snapshot);
-        for (MappingRequest request : requests) { results.add(resolvePrepared(request, prepared)); }
-        return results;
-    }
-
-    public static List<ConfigIssue> validateSnapshot(MappingSnapshot snapshot) {
-        return prepare(snapshot).issues;
-    }
-
-    private static Prepared prepare(MappingSnapshot snapshot) {
-        Prepared p = new Prepared();
-        if (snapshot == null) {
-            p.issues.add(issue('INVALID_SNAPSHOT', 'ERROR', 'A snapshot is required.', null));
-            return p;
-        }
-        p.digest = snapshot.configDigest;
-        Map<String, List<String>> identities = new Map<String, List<String>>();
-        Set<String> names = new Set<String>();
-        List<Value_Mapping__mdt> rows = snapshot.getRecords();
-        for (Value_Mapping__mdt row : rows) {
-            if (row == null) {
-                p.issues.add(issue('INVALID_RECORD', 'ERROR', 'A snapshot contains a null record.', null));
-                continue;
-            }
-            if (row.Active__c != true) { continue; }
-            List<String> recordNames = new List<String>{row.DeveloperName};
-            if (String.isBlank(row.DeveloperName) || String.isBlank(row.Mapping_Type__c) ||
-                row.Source_Value__c == null || row.Source_Value__c.length() == 0 ||
-                String.isBlank(row.Target_Value__c)) {
-                p.issues.add(issue('INVALID_RECORD', 'ERROR',
-                    'Active records require an identifier, mapping type, nonempty source and nonblank target.', recordNames));
-                continue;
-            }
-            if (names.contains(row.DeveloperName)) {
-                p.issues.add(issue('DUPLICATE_RECORD_NAME', 'ERROR', 'Record identifiers must be unique.', recordNames));
-            }
-            names.add(row.DeveloperName);
-            String provider = normalizeProvider(row.Provider_Key__c);
-            String version = normalizeVersion(row.Version_Key__c);
-            String key = identity(provider, version, row.Mapping_Type__c, row.Source_Value__c);
-            if (!identities.containsKey(key)) { identities.put(key, new List<String>()); }
-            identities.get(key).add(row.DeveloperName);
-            p.index.put(key, row);
-            if (version != '') { p.versions.add(versionIdentity(provider, version, row.Mapping_Type__c)); }
-        }
-        List<String> keys = new List<String>(identities.keySet());
-        keys.sort();
-        for (String key : keys) {
-            List<String> conflicting = identities.get(key);
-            if (conflicting.size() > 1) {
-                conflicting.sort();
-                p.issues.add(issue('DUPLICATE_MAPPING', 'ERROR',
-                    'Multiple active records define the same normalized mapping.', conflicting));
-            }
-        }
-        return p;
-    }
-
-    private static MappingResult resolvePrepared(MappingRequest request, Prepared p) {
-        MappingResult result = new MappingResult();
-        result.configDigest = p.digest;
-        // Policies can never conceal a broken snapshot, even for unrelated source values.
-        if (!p.issues.isEmpty()) {
-            result.status = 'INVALID_CONFIG';
-            result.issues = (List<ConfigIssue>) JSON.deserialize(JSON.serialize(p.issues), List<ConfigIssue>.class);
-            return result;
-        }
-        if (request == null || String.isBlank(request.mappingType) ||
-            request.sourceValue == null || request.sourceValue.length() == 0 ||
-            request.missingPolicy == null ||
-            !(request.missingPolicy.equals('ERROR') || request.missingPolicy.equals('RETURN_NULL') ||
-              request.missingPolicy.equals('USE_DEFAULT')) ||
-            (request.missingPolicy.equals('USE_DEFAULT') && String.isBlank(request.defaultValue))) {
-            result.status = 'INVALID_REQUEST';
-            result.issues.add(issue('INVALID_REQUEST', 'ERROR',
-                'Supply a mapping type, nonempty source, valid missing policy and nonblank default for USE_DEFAULT.', null));
-            return result;
-        }
-        String provider = normalizeProvider(request.provider);
-        String version = normalizeVersion(request.version);
-        if (version != '' && !p.versions.contains(versionIdentity('', version, request.mappingType)) &&
-            !p.versions.contains(versionIdentity(provider, version, request.mappingType))) {
-            Boolean strict = request.strictVersion == true;
-            result.issues.add(issue('UNKNOWN_VERSION', strict ? 'ERROR' : 'WARNING',
-                'No active mapping defines the requested version for this provider/common scope and mapping type.', null));
-            if (strict) { result.status = 'INVALID_REQUEST'; return result; }
-            result.fallbackUsed = true;
-        }
-        List<String> providers = new List<String>{'', '', provider, provider};
-        List<String> versions = new List<String>{'', version, '', version};
-        Integer highest = provider == '' ? (version == '' ? 0 : 1) : (version == '' ? 2 : 3);
-        Integer winningLayer;
-        for (Integer i = 0; i < 4; i++) {
-            if ((i == 1 && version == '') || (i >= 2 && provider == '') || (i == 3 && version == '')) { continue; }
-            Value_Mapping__mdt row = p.index.get(identity(providers[i], versions[i], request.mappingType, request.sourceValue));
-            if (row != null) {
-                if (result.winner != null) { result.shadowedRecords.add(result.winner); }
-                result.winner = row.DeveloperName;
-                result.value = row.Target_Value__c;
-                result.layer = LAYERS[i];
-                winningLayer = i;
-            }
-        }
-        if (result.winner != null) {
-            result.status = 'RESOLVED';
-            result.fallbackUsed = result.fallbackUsed || winningLayer < highest;
-            return result;
-        }
-        result.status = 'MISSING';
-        if (request.missingPolicy.equals('USE_DEFAULT')) {
-            result.status = 'DEFAULTED';
-            result.value = request.defaultValue;
-            result.fallbackUsed = true;
-        } else if (request.missingPolicy.equals('ERROR')) {
-            result.issues.add(issue('MISSING_MAPPING', 'ERROR', 'No mapping matches the requested input.', null));
-        }
-        return result;
-    }
-
-    private static String normalizeProvider(String value) {
+    private static String normalize(String value) {
         return String.isBlank(value) ? '' : value.trim().toLowerCase();
-    }
-    private static String normalizeVersion(String value) {
-        return String.isBlank(value) ? '' : value.trim().toUpperCase();
-    }
-    // JSON arrays avoid collisions from delimiters embedded in exact input strings.
-    private static String identity(String provider, String version, String mappingType, String source) {
-        return JSON.serialize(new List<String>{provider, version, mappingType, source});
-    }
-    private static String versionIdentity(String provider, String version, String mappingType) {
-        return JSON.serialize(new List<String>{provider, version, mappingType});
-    }
-    private static ConfigIssue issue(String code, String severity, String message, List<String> records) {
-        return new ConfigIssue(code, severity, message, records);
     }
 }
