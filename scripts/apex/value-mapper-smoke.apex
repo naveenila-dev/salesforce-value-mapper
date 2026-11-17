@@ -1,26 +1,29 @@
-// Execute after deploying the four fictional demo metadata records.
-MappingRequest commonRequest = new MappingRequest(null, null, 'EmploymentType', 'Part time');
-MappingResult commonResult = MappingResolver.resolve(commonRequest);
-System.assertEquals('RESOLVED', commonResult.status);
-System.assertEquals('PT', commonResult.value);
-System.assertEquals('Common_Employment_PartTime', commonResult.winner);
+// Works with an empty installation or customer mappings; no demo records required.
+MappingSnapshot installed = MappingRepository.loadSnapshot();
+List<ConfigIssue> issues = MappingResolver.validateSnapshot(installed);
+System.assertEquals(0, issues.size(), 'Invalid installed configuration: ' + JSON.serialize(issues));
+System.assertEquals(0, MappingResolver.resolveAll(new List<MappingRequest>()).size());
 
-MappingRequest overrideRequest = new MappingRequest('ParcelDemo', 'V2', 'EmploymentType', 'Part time');
-MappingResult overrideResult = MappingResolver.resolve(overrideRequest);
-System.assertEquals('EMP_PART', overrideResult.value);
-System.assertEquals('ParcelDemo_V2_Employment_PartTime', overrideResult.winner);
-System.assertEquals('PROVIDER_VERSION', overrideResult.layer);
-System.assertEquals(false, overrideResult.fallbackUsed);
-System.assertEquals(3, overrideResult.shadowedRecords.size());
-System.assertEquals(0, MappingResolver.validateSnapshot(MappingRepository.loadSnapshot()).size());
-
-MappingRequest missingRequest = new MappingRequest('ParcelDemo', null, 'EmploymentType', 'Contractor');
-System.assertEquals('MISSING', MappingResolver.resolve(missingRequest).status);
-missingRequest.missingPolicy = 'RETURN_NULL';
-MappingResult nullResult = MappingResolver.resolve(missingRequest);
-System.assertEquals('MISSING', nullResult.status);
-System.assertEquals(null, nullResult.value);
-missingRequest.missingPolicy = 'USE_DEFAULT';
-missingRequest.defaultValue = 'UNSPECIFIED';
-System.assertEquals('UNSPECIFIED', MappingResolver.resolve(missingRequest).value);
-System.debug(LoggingLevel.INFO, 'VALUE_MAPPER_SMOKE_PASS ' + JSON.serializePretty(overrideResult));
+// Exercise resolution without adding records or depending on customer values.
+MappingSnapshot fixture = new MappingSnapshot(new List<Value_Mapping__mdt>{
+    new Value_Mapping__mdt(DeveloperName = 'Smoke_Common', Mapping_Type__c = 'Smoke',
+        Source_Value__c = 'input', Target_Value__c = 'shared', Active__c = true),
+    new Value_Mapping__mdt(DeveloperName = 'Smoke_Override', Mapping_Type__c = 'Smoke',
+        Provider_Key__c = 'ExampleProvider', Version_Key__c = 'V2',
+        Source_Value__c = 'input', Target_Value__c = 'override', Active__c = true)
+});
+MappingRequest request = new MappingRequest('ExampleProvider', 'V2', 'Smoke', 'input');
+MappingResult result = MappingResolver.resolve(request, fixture);
+System.assertEquals('RESOLVED', result.status);
+System.assertEquals('override', result.value);
+System.assertEquals('Smoke_Override', result.winner);
+System.assertEquals('PROVIDER_VERSION', result.layer);
+System.assertEquals('shared', MappingResolver.resolve(new MappingRequest(null, null, 'Smoke', 'input'), fixture).value);
+request.sourceValue = 'missing';
+System.assertEquals('MISSING', MappingResolver.resolve(request, fixture).status);
+request.missingPolicy = 'RETURN_NULL';
+System.assertEquals(null, MappingResolver.resolve(request, fixture).value);
+request.missingPolicy = 'USE_DEFAULT';
+request.defaultValue = 'default';
+System.assertEquals('default', MappingResolver.resolve(request, fixture).value);
+System.debug(LoggingLevel.INFO, 'VALUE_MAPPER_SMOKE_PASS installedConfigDigest=' + installed.configDigest);

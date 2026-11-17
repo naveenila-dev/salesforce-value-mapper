@@ -1,8 +1,9 @@
 {
-  "name": "salesforce-app",
+  "name": "salesforce-value-mapper",
   "private": true,
   "version": "1.0.0",
-  "description": "Salesforce App",
+  "license": "MIT",
+  "description": "Generic Apex value mappings backed by Custom Metadata",
   "scripts": {
     "lint": "eslint **/{aura,lwc}/**/*.js",
     "test": "npm run test:unit",

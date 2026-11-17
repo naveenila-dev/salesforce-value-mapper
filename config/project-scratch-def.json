@@ -1,7 +1,6 @@
 {
-  "orgName": "ilanaveen company",
+  "orgName": "Salesforce Value Mapper",
   "edition": "Developer",
-  "features": ["EnableSetPasswordInApi"],
   "settings": {
     "lightningExperienceSettings": {
       "enableS1DesktopEnabled": true

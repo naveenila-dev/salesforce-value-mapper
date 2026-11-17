@@ -2,26 +2,83 @@
 
 Versioned value mappings, explicit override rules, and an explanation for every result.
 
-An Apex library for exact string-to-string translation using `Value_Mapping__mdt`. Source is implemented in this project. No managed/unlocked package or public installation link has been published. No license has been selected; this repository does not yet grant a public open-source license.
+A reusable Apex library for exact string-to-string translation using `Value_Mapping__mdt`. Install the source into your own Salesforce org, then define your own providers, mapping types, versions, and values. It has no customer data model, external service, or org-specific dependency. Licensed under [MIT](LICENSE).
 
-Latest verification: [deployment and test results](docs/deployment-verification.md). The mapper deployment and smoke test passed; two existing org tests failed in the separate full-suite run.
+## Install in your org
 
-## Deploy and verify
+You need Git, the [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli), and an org with Apex and Custom Metadata support on **API 65.0 or later**. Your user must be allowed to deploy Apex and Custom Metadata and execute anonymous Apex for the smoke check. Start in a sandbox or Developer Edition org. No Dev Hub, npm install, package ID, or paid service is required for source installation.
 
-Requires Salesforce CLI, an authorized Apex-capable org, and permissions to deploy Apex and Custom Metadata. Source targets **API 65.0**. The deployment target for this implementation is the connected **crmaTh Developer Edition** org. Other editions and package installation have not been verified.
+Clone this repository:
 
 ```sh
-sf project deploy start --source-dir force-app --target-org crmaTh --test-level RunLocalTests --wait 10
-sf apex run --file scripts/apex/value-mapper-smoke.apex --target-org crmaTh
+git clone https://github.com/naveenila-dev/salesforce-value-mapper.git
+cd salesforce-value-mapper
 ```
 
-If deployment continues asynchronously, use `sf project deploy report --job-id <deployment-id> --target-org crmaTh --wait 10` to confirm the final result. `RunLocalTests` includes existing local tests in the target org. For an isolated library check use `--test-level RunSpecifiedTests --tests MappingResolverTest` instead.
+Authorize **your own target org**, choosing one login command:
 
-The smoke script asserts the shared default, provider/version override, winner, explanation, snapshot validity, and all three missing policies. It expects the four supplied fictional demo records to remain unchanged. It performs no DML or callouts.
+```sh
+# Sandbox
+sf org login web --alias value-mapper --instance-url https://test.salesforce.com
+
+# Developer Edition or production
+sf org login web --alias value-mapper --instance-url https://login.salesforce.com
+```
+
+You may use your org's My Domain login URL instead. `value-mapper` is a local alias you choose, not a preconfigured org. Use the same alias in the commands below.
+
+Validate, then install (macOS/Linux Bash or Git Bash on Windows):
+
+```sh
+bash scripts/install.sh --target-org value-mapper --dry-run
+bash scripts/install.sh --target-org value-mapper
+```
+
+The installer deploys only the library, Custom Metadata Type, and tests. **No mapping records are installed by default.** It explicitly targets the org you supply, runs `MappingResolverTest`, and runs a smoke check after a successful deployment. It stops on deployment errors, pending deployments, and smoke failures. The dry run saves no changes and skips the smoke check.
+
+Without Bash, run the equivalent commands from the repository root (also usable in PowerShell):
+
+```sh
+sf project deploy start --source-dir force-app --target-org value-mapper --test-level RunSpecifiedTests --tests MappingResolverTest --wait 30
+sf apex run --file scripts/apex/value-mapper-smoke.apex --target-org value-mapper
+```
+
+Run the smoke command only after the deployment reports `Succeeded`. If deployment continues asynchronously or times out, use its returned ID:
+
+```sh
+sf project deploy report --job-id DEPLOYMENT_ID --target-org value-mapper --wait 30
+```
+
+The smoke check validates installed configuration and exercises synthetic mappings in memory, without DML or callouts. Look for `VALUE_MAPPER_SMOKE_PASS`. An empty configuration is valid; lookups return `MISSING` until you add mappings.
+
+`RunSpecifiedTests` checks this library. For your org's broader regression suite, add `--test-level RunLocalTests` to the installer or use that level in the deploy command, omitting `--tests`. Existing org tests may fail independently of this library. Production deployments must meet Salesforce's test and coverage requirements; specified tests require at least 75% coverage for each deployed class/trigger. See the [Salesforce deployment reference](https://developer.salesforce.com/docs/platform/salesforce-cli-reference/guide/cli_reference_project_deploy_start.html).
+
+This is an **unpackaged source installation**, with no namespace. Review existing components for name collisions, especially `MappingResolver`, `MappingRequest`, and `Value_Mapping__mdt`, before deploying. For upgrades, review the new source and repeat the core install; existing mapping records are not included in that deployment. Back up your configuration and review breaking changes first. Uninstalling requires manually removing dependent consumer code, mapping records, and library metadata.
+
+No managed/unlocked package or one-click installation link has been published. [Verification results](docs/deployment-verification.md) include a successful core deployment dry run, 15 passing Apex tests, and both smoke checks in an existing Developer Edition org. Fresh-org installation and production compatibility have not yet been verified.
+
+## Optional demo mappings
+
+To try the example below, explicitly install the four fictional demo records:
+
+```sh
+bash scripts/install.sh --target-org value-mapper --with-examples
+```
+
+Or, after installing the core library:
+
+```sh
+sf project deploy start --source-dir examples --target-org value-mapper --test-level RunSpecifiedTests --tests MappingResolverTest --wait 30
+sf apex run --file scripts/apex/value-mapper-demo.apex --target-org value-mapper
+```
+
+Wait for deployment success before running the demo. Its success marker is `VALUE_MAPPER_DEMO_PASS`. The records live in `examples/main/default/customMetadata`; reinstalling them overwrites records with those same DeveloperNames. Use them in a test org before adding your own configuration. The demo expects these records to remain unchanged.
 
 No mapper-specific permission set is required for calls from other Apex. Consumers own entry-point authorization, class access for exposed endpoints, and logging decisions. Administrators need the normal Salesforce permissions to manage Custom Metadata. There is no end-user UI or Flow adapter in this release.
 
 ## Apex usage
+
+After installing the optional demo mappings:
 
 ```apex
 MappingRequest request = new MappingRequest(
@@ -60,7 +117,7 @@ The actual result also includes a SHA-256 `configDigest`.
 
 ## Configuration and precedence
 
-Manage records at **Setup → Custom Metadata Types → Value Mapping → Manage Records**, or deploy reviewed source records from `force-app/main/default/customMetadata`.
+Manage records at **Setup → Custom Metadata Types → Value Mapping → Manage Records**, or create reviewed source records in `force-app/main/default/customMetadata` and deploy them alongside the library. This directory is intentionally empty in a fresh clone; create it when adding your own records. Keep provider/version blank for common/base scopes. Use your own mapping type and source/target strings; the library does not hard-code `EmploymentType` or `ParcelDemo`.
 
 | Field | Rule |
 | --- | --- |
@@ -121,11 +178,44 @@ The digest hashes a sorted canonical representation of all selected configuratio
 - `MappingRepository`: transaction-local metadata loader.
 - `MappingResolver`: validation, precedence, exact lookup, and bulk API.
 - `MappingResolverTest`: fixture-based Apex tests plus metadata cache verification.
-- Four fictional `EmploymentType` sample records; no customer mappings.
-- `scripts/apex/value-mapper-smoke.apex`: executable installed-configuration check.
+- `force-app`: core library, schema, and tests; no supplied mapping records.
+- `examples`: optional package directory with four fictional `EmploymentType` demo records. Always select `--source-dir force-app` for a core-only deployment; commands that deploy all package directories may also include examples.
+- `scripts/install.sh`: installation into an explicitly selected org.
+- `scripts/apex/value-mapper-smoke.apex`: configuration-independent installation check.
+- `scripts/apex/value-mapper-demo.apex`: optional installed-demo check.
 
 Tests cover all precedence layers, provider base versus common version, normalization, case-sensitive inputs, conflict rejection, inactive/invalid records, missing policies, strict/lenient versions, scope-specific version knowledge, ordered 200-request batches, snapshot isolation, deterministic digests, collision-safe keys, result isolation, and transaction-local cache reuse. They do not depend on org-specific business data.
 
-The batch test uses four synthetic mapping records and 200 requests; it does not establish a maximum supported configuration size. The loader reads all records and builds an in-memory index, so heap, CPU and query-row limits apply. Measure realistic configuration volumes before integration use. Large-scale benchmarks, clean-org installation, packaging, snapshot comparison, Flow support and an admin UI remain future work. Public publishing and license selection are separate release steps.
+The batch test uses four synthetic mapping records and 200 requests; it does not establish a maximum supported configuration size. The loader reads all records and builds an in-memory index, so heap, CPU and query-row limits apply. Measure realistic configuration volumes before integration use. Large-scale benchmarks, clean-org verification, packaging, snapshot comparison, Flow support and an admin UI remain future work. Repository visibility is managed by the maintainer; these changes do not publish the repository or a package.
 
 Store non-secret configuration only. Consumer applications own external-provider contracts, authorization, logging, and application-specific fixtures.
+
+## Development and contributing
+
+Run the Apex tests in an authorized org:
+
+```sh
+sf apex run test --class-names MappingResolverTest --target-org value-mapper --code-coverage --result-format human --wait 30
+```
+
+The installer has local boundary checks using Python 3 and a mock CLI; these do not deploy anything or substitute for Apex tests:
+
+```sh
+python3 -m unittest discover -s scripts/tests -v
+```
+
+For clean-org verification, authorize your own Dev Hub, create a scratch org, and install the core without demo records:
+
+```sh
+sf org login web --alias value-mapper-hub --set-default-dev-hub
+sf org create scratch --definition-file config/project-scratch-def.json --target-dev-hub value-mapper-hub --alias value-mapper-clean --duration-days 1
+bash scripts/install.sh --target-org value-mapper-clean
+```
+
+Then optionally install the demo using `--with-examples`. Delete the scratch org when finished with `sf org delete scratch --target-org value-mapper-clean`. Dev Hub is needed only for this development workflow, not normal installation.
+
+Report issues with synthetic mapping records, the request, expected/actual results, library commit, and API version. Omit credentials and customer data. Include Apex tests when changing resolver behavior.
+
+## License
+
+[MIT](LICENSE). You may use, modify, and redistribute the library under its terms.
