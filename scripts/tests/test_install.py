@@ -52,6 +52,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertNotIn("examples", calls[0]["args"])
         self.assertIn("MappingResolverTest", calls[0]["args"])
+        self.assertIn("MappingFlowActionTest", calls[0]["args"])
         for call in calls:
             args = call["args"]
             self.assertEqual("my chosen org", args[args.index("--target-org") + 1])

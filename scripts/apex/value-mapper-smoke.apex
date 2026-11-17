@@ -26,4 +26,7 @@ System.assertEquals(null, MappingResolver.resolve(request, fixture).value);
 request.missingPolicy = 'USE_DEFAULT';
 request.defaultValue = 'default';
 System.assertEquals('default', MappingResolver.resolve(request, fixture).value);
+Map<String, Map<String, String>> values = MappingResolver.loadValues('ExampleProvider', 'V2', fixture);
+System.assertEquals('override', values.get('Smoke').get('input'));
+System.assertEquals(null, values.get('Unknown')?.get('input'));
 System.debug(LoggingLevel.INFO, 'VALUE_MAPPER_SMOKE_PASS installedConfigDigest=' + installed.configDigest);

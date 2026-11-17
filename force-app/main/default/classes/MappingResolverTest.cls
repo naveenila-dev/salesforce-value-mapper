@@ -215,8 +215,125 @@ private class MappingResolverTest {
         System.assert(first === second, 'Repository must reuse the same snapshot.');
         MappingResult result = MappingResolver.resolve(request('ParcelDemo', 'V2'));
         System.assertEquals(queryCount, Limits.getQueries());
-        System.assertEquals(first.configDigest, result.configDigest);
+        System.assertEquals(MappingRepository.loadSnapshot(new Set<String>{'ParcelDemo'}).configDigest, result.configDigest);
         // No org-specific result assumption: deterministic fixtures test the contract above.
         Test.stopTest();
+    }
+
+    @IsTest static void scopedRepositorySelectsCompleteProviderConfiguration() {
+        MappingSnapshot all = MappingRepository.loadSnapshot();
+        MappingSnapshot selected = MappingRepository.loadSnapshot(new Set<String>{' ParcelDemo ', 'ROUTEDEMO', null});
+        List<Value_Mapping__mdt> expected = new List<Value_Mapping__mdt>();
+        for (Value_Mapping__mdt record : all.getRecords()) {
+            if (String.isBlank(record.Provider_Key__c) ||
+                record.Provider_Key__c.trim().equalsIgnoreCase('ParcelDemo') ||
+                record.Provider_Key__c.trim().equalsIgnoreCase('RouteDemo')) {
+                expected.add(record);
+            }
+        }
+        System.assertEquals(new MappingSnapshot(expected).configDigest, selected.configDigest);
+        System.assert(selected === MappingRepository.loadSnapshot(new Set<String>{'routedemo', 'parceldemo'}),
+            'Order, case, whitespace and blank entries must not split the cache.');
+        List<Value_Mapping__mdt> common = new List<Value_Mapping__mdt>();
+        for (Value_Mapping__mdt record : all.getRecords()) {
+            if (String.isBlank(record.Provider_Key__c)) { common.add(record); }
+        }
+        MappingSnapshot commonOnly = MappingRepository.loadSnapshot(new Set<String>());
+        System.assertEquals(new MappingSnapshot(common).configDigest, commonOnly.configDigest);
+        System.assert(commonOnly === MappingRepository.loadSnapshot(null));
+        System.assert(commonOnly === MappingRepository.loadSnapshot(new Set<String>{null, ' '}));
+        System.assertEquals(commonOnly.configDigest,
+            MappingResolver.resolve(new MappingRequest(null, null, 'EmploymentType', 'Part time')).configDigest);
+        System.assertEquals(MappingRepository.loadSnapshot(new Set<String>{'ParcelDemo'}).configDigest,
+            MappingResolver.resolve(request(' ParcelDemo ', 'V2')).configDigest);
+        List<MappingResult> batch = MappingResolver.resolveAll(new List<MappingRequest>{
+            request('ParcelDemo', 'V2'), request('RouteDemo', null), null
+        });
+        System.assertEquals(3, batch.size());
+        for (MappingResult result : batch) { System.assertEquals(selected.configDigest, result.configDigest); }
+    }
+
+    @IsTest static void nestedValuesApplyTheSamePrecedenceAndFallbacks() {
+        List<Value_Mapping__mdt> rows = fixtures();
+        rows.add(row('OtherProvider', 'RouteDemo', 'V2', 'Other only', 'OTHER'));
+        rows.add(row('OtherVersion', 'ParcelDemo', 'V3', 'Future only', 'FUTURE'));
+        Value_Mapping__mdt inactive = row('Inactive', 'ParcelDemo', 'V2', 'Inactive', 'NO');
+        inactive.Active__c = false; rows.add(inactive);
+        rows.add(row('ExactCase', null, null, 'part time', 'lower'));
+        MappingSnapshot snapshot = new MappingSnapshot(rows);
+        Map<String, Map<String, String>> values = MappingResolver.loadValues(' ParcelDemo ', ' v2 ', snapshot);
+        System.assertEquals('EMP_PART', values.get('EmploymentType').get('Part time'));
+        System.assertEquals('lower', values.get('EmploymentType').get('part time'));
+        System.assertEquals(null, values.get('employmenttype'));
+        for (String source : new List<String>{'Other only', 'Future only', 'Inactive', 'Missing'}) {
+            System.assertEquals(null, values.get('EmploymentType').get(source));
+        }
+        for (String provider : new List<String>{null, 'ParcelDemo', 'RouteDemo'}) {
+            for (String version : new List<String>{null, 'V2', 'V999'}) {
+                Map<String, Map<String, String>> effective = MappingResolver.loadValues(provider, version, snapshot);
+                for (String type : effective.keySet()) {
+                    for (String source : effective.get(type).keySet()) {
+                        System.assertEquals(MappingResolver.resolve(
+                            new MappingRequest(provider, version, type, source), snapshot).value,
+                            effective.get(type).get(source));
+                    }
+                }
+            }
+        }
+        System.assertEquals('P_TIME', MappingResolver.loadValues('ParcelDemo', 'V999', snapshot)
+            .get('EmploymentType').get('Part time'));
+        rows.remove(3);
+        System.assertEquals('P_TIME', MappingResolver.loadValues('ParcelDemo', 'V2', new MappingSnapshot(rows))
+            .get('EmploymentType').get('Part time'), 'Provider base overrides common version.');
+    }
+
+    @IsTest static void nestedValuesSupportManyCategoriesAndCallerOwnedMaps() {
+        List<Value_Mapping__mdt> rows = new List<Value_Mapping__mdt>();
+        for (Integer i=0; i<70; i++) {
+            Value_Mapping__mdt record = row('Mapping'+i, i<50 ? 'ParcelDemo' : 'RouteDemo', 'V2', 'X', 'Y'+i);
+            record.Mapping_Type__c = 'Type'+i; rows.add(record);
+        }
+        MappingSnapshot snapshot = new MappingSnapshot(rows);
+        Map<String, Map<String, String>> parcel = MappingResolver.loadValues('ParcelDemo', 'V2', snapshot);
+        Map<String, Map<String, String>> route = MappingResolver.loadValues('RouteDemo', 'V2', snapshot);
+        System.assertEquals(50, parcel.size());
+        System.assertEquals(20, route.size());
+        for (Integer i=0; i<70; i++) {
+            System.assertEquals('Y'+i, (i<50 ? parcel : route).get('Type'+i).get('X'));
+        }
+        parcel.get('Type0').put('X', 'MUTATED');
+        System.assertEquals('Y0', MappingResolver.loadValues('ParcelDemo', 'V2', snapshot).get('Type0').get('X'));
+        System.assertEquals(0, MappingResolver.loadValues('ParcelDemo', null, snapshot).size());
+        System.assertEquals(0, MappingResolver.loadValues('Unknown', 'V2', snapshot).size());
+        System.assertEquals(0, MappingResolver.loadValues(null, null,
+            new MappingSnapshot(new List<Value_Mapping__mdt>())).size());
+    }
+
+    @IsTest static void nestedValuesRejectInvalidConfigurationBeforeReturningValues() {
+        List<Value_Mapping__mdt> duplicate = fixtures(); duplicate.add(duplicate[0]);
+        for (MappingSnapshot snapshot : new List<MappingSnapshot>{
+            null, new MappingSnapshot(null), new MappingSnapshot(duplicate)
+        }) {
+            Boolean rejected = false;
+            try { MappingResolver.loadValues('ParcelDemo', 'V2', snapshot); }
+            catch (MappingResolver.ConfigurationException ex) {
+                rejected = true;
+                System.assert(ex.getMessage().contains('Invalid mapping configuration'));
+            }
+            System.assert(rejected, 'Never return a partial map for invalid configuration.');
+        }
+    }
+
+    @IsTest static void nestedValuesUseProviderScopedRepository() {
+        MappingSnapshot snapshot = MappingRepository.loadSnapshot(new Set<String>{'ParcelDemo'});
+        if (MappingResolver.validateSnapshot(snapshot).isEmpty()) {
+            System.assertEquals(MappingResolver.loadValues('ParcelDemo', 'V2', snapshot),
+                MappingResolver.loadValues(' ParcelDemo ', ' v2 '));
+        } else {
+            Boolean rejected = false;
+            try { MappingResolver.loadValues('ParcelDemo', 'V2'); }
+            catch (MappingResolver.ConfigurationException ex) { rejected = true; }
+            System.assert(rejected);
+        }
     }
 }

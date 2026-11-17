@@ -11,6 +11,43 @@ public with sharing class MappingResolver {
         String digest;
     }
 
+    /** Invalid configuration cannot be represented safely as a plain value map. */
+    public class ConfigurationException extends Exception {}
+
+    /** Effective values for every type/source in a provider's requested version. */
+    public static Map<String, Map<String, String>> loadValues(String provider, String version) {
+        return loadValues(provider, version, MappingRepository.loadSnapshot(new Set<String>{provider}));
+    }
+
+    public static Map<String, Map<String, String>> loadValues(
+        String provider, String version, MappingSnapshot snapshot
+    ) {
+        Prepared prepared = prepare(snapshot);
+        if (!prepared.issues.isEmpty()) {
+            throw new ConfigurationException('Invalid mapping configuration: ' + JSON.serialize(prepared.issues));
+        }
+        Map<String, Map<String, String>> values = new Map<String, Map<String, String>>();
+        String providerKey = normalizeProvider(provider);
+        String versionKey = normalizeVersion(version);
+        for (Value_Mapping__mdt row : prepared.index.values()) {
+            String rowProvider = normalizeProvider(row.Provider_Key__c);
+            String rowVersion = normalizeVersion(row.Version_Key__c);
+            if ((rowProvider != '' && rowProvider != providerKey) ||
+                (rowVersion != '' && rowVersion != versionKey)) { continue; }
+            if (!values.containsKey(row.Mapping_Type__c)) {
+                values.put(row.Mapping_Type__c, new Map<String, String>());
+            }
+            Map<String, String> category = values.get(row.Mapping_Type__c);
+            if (!category.containsKey(row.Source_Value__c)) {
+                MappingResult result = resolvePrepared(new MappingRequest(
+                    provider, version, row.Mapping_Type__c, row.Source_Value__c
+                ), prepared);
+                category.put(row.Source_Value__c, result.value);
+            }
+        }
+        return values;
+    }
+
     public static MappingResult resolve(MappingRequest request) {
         return resolveAll(new List<MappingRequest>{request})[0];
     }
@@ -20,7 +57,12 @@ public with sharing class MappingResolver {
     }
 
     public static List<MappingResult> resolveAll(List<MappingRequest> requests) {
-        return resolveAll(requests, MappingRepository.loadSnapshot());
+        if (requests == null || requests.isEmpty()) { return new List<MappingResult>(); }
+        Set<String> providers = new Set<String>();
+        for (MappingRequest request : requests) {
+            if (request != null) { providers.add(request.provider); }
+        }
+        return resolveAll(requests, MappingRepository.loadSnapshot(providers));
     }
 
     public static List<MappingResult> resolveAll(List<MappingRequest> requests, MappingSnapshot snapshot) {

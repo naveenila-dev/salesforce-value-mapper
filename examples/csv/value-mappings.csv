@@ -1,0 +1,5 @@
+Name,Provider_Key__c,Version_Key__c,Mapping_Type__c,Source_Value__c,Target_Value__c,Active__c
+Common_Employment_PartTime,,,EmploymentType,Part time,PT,true
+Common_V2_Employment_PartTime,,V2,EmploymentType,Part time,PART_TIME,true
+ParcelDemo_Employment_PartTime,ParcelDemo,,EmploymentType,Part time,P_TIME,true
+ParcelDemo_V2_Employment_PartTime,ParcelDemo,V2,EmploymentType,Part time,EMP_PART,true

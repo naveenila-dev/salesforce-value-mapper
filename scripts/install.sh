@@ -64,7 +64,7 @@ cd "$project_root"
 deploy_args=(project deploy start --source-dir force-app --target-org "$target_org"
   --test-level "$test_level" --wait "$wait_minutes")
 if [[ "$test_level" == RunSpecifiedTests ]]; then
-  deploy_args+=(--tests MappingResolverTest)
+  deploy_args+=(--tests MappingResolverTest --tests MappingFlowActionTest)
 fi
 if [[ "$with_examples" == true ]]; then
   deploy_args+=(--source-dir examples)

@@ -1,7 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><label>Common V2 Employment PartTime</label><protected>false</protected><values><field>Version_Key__c</field><value xsi:type="xsd:string">V2</value></values>
-<values><field>Mapping_Type__c</field><value xsi:type="xsd:string">EmploymentType</value></values>
-<values><field>Source_Value__c</field><value xsi:type="xsd:string">Part time</value></values>
-<values><field>Target_Value__c</field><value xsi:type="xsd:string">PART_TIME</value></values>
-<values><field>Active__c</field><value xsi:type="xsd:boolean">true</value></values>
+<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <label>Common_V2_Employment_PartTime</label>
+    <protected>false</protected>
+    <values>
+        <field>Active__c</field>
+        <value xsi:type="xsd:boolean">true</value>
+    </values>
+    <values>
+        <field>Mapping_Type__c</field>
+        <value xsi:type="xsd:string">EmploymentType</value>
+    </values>
+    <values>
+        <field>Source_Value__c</field>
+        <value xsi:type="xsd:string">Part time</value>
+    </values>
+    <values>
+        <field>Target_Value__c</field>
+        <value xsi:type="xsd:string">PART_TIME</value>
+    </values>
+    <values>
+        <field>Version_Key__c</field>
+        <value xsi:type="xsd:string">V2</value>
+    </values>
 </CustomMetadata>
